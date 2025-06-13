@@ -8,7 +8,7 @@ pnpm-debug.log*
 lerna-debug.log*
 
 node_modules
-# dist # keep for gh pages
+dist
 dist-ssr
 *.local
 
