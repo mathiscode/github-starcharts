@@ -34,11 +34,10 @@ jobs:
         run: pnpm install
       - name: Build
         run: pnpm run build
-      - name: Upload build artifacts
-        uses: actions/upload-artifact@v4
+      - name: Upload pages artifact
+        uses: actions/upload-pages-artifact@v3
         with:
-          name: dist
-          path: ./dist
+          path: dist
 
   deploy:
     needs: build
@@ -47,17 +46,8 @@ jobs:
       url: ${{ steps.deployment.outputs.page_url }}
     runs-on: ubuntu-latest
     steps:
-      - name: Download build artifacts
-        uses: actions/download-artifact@v4
-        with:
-          name: dist
-          path: ./dist
       - name: Setup Pages
         uses: actions/configure-pages@v5
-      - name: Upload artifact
-        uses: actions/upload-pages-artifact@v3
-        with:
-          path: './dist'
       - name: Deploy to GitHub Pages
         id: deployment
         uses: actions/deploy-pages@v4
