@@ -10,6 +10,19 @@ let description = $state<string | null>(null)
 let error = $state<string | null>(null)
 let isLoading = $state(false)
 let userRepos = $state<Array<{ name: string, stargazers_count: number, description: string | null }> | null>(null)
+let avatarUrl = $state<string | null>(null)
+
+let formUsername = $state('')
+let formRepo = $state('')
+let suggestions = $state<Array<{ login: string, avatar_url: string, type: string }>>([])
+let showSuggestions = $state(false)
+let isSearching = $state(false)
+let searchTimeout: number | null = null
+
+let repoSuggestions = $state<Array<{ name: string, full_name: string, description: string | null, stargazers_count: number }>>([])
+let showRepoSuggestions = $state(false)
+let isSearchingRepos = $state(false)
+let repoSearchTimeout: number | null = null
 
 const STAR_TIERS = [
   { color: 'gold', value: 10000 },
@@ -41,8 +54,8 @@ const calculateStars = (count: number | null) => {
 let displayedStars = $derived(calculateStars(stars))
 
 const updateRepoFromPath = () => {
-  const path = window.location.pathname.slice(1)
-  const parts = path.split('/')
+  const hash = window.location.hash.slice(1)
+  const parts = hash.split('/')
   if (parts.length === 2 && parts[0] && parts[1]) {
     username = parts[0]
     repo = parts[1]
@@ -53,25 +66,25 @@ const updateRepoFromPath = () => {
     repo = ''
     error = null
     userRepos = null
-  } else if (path !== '') {
+  } else if (hash !== '') {
     username = ''
     repo = ''
     stars = null
     userRepos = null
-    error = 'Invalid URL format. Use <strong>/username</strong> or <strong>/username/repo</strong>'
+    error = 'Invalid URL format. Use <strong>#username</strong> or <strong>#username/repo</strong>'
   } else {
     username = ''
     repo = ''
     stars = null
     userRepos = null
-    error = 'Enter a path in the URL like <strong>/username</strong> or <strong>/username/repo</strong>'
+    error = 'Enter a hash in the URL like <strong>#username</strong> or <strong>#username/repo</strong>'
   }
 }
 
 onMount(() => {
   updateRepoFromPath()
-  window.addEventListener('popstate', updateRepoFromPath)
-  return () => window.removeEventListener('popstate', updateRepoFromPath)
+  window.addEventListener('hashchange', updateRepoFromPath)
+  return () => window.removeEventListener('hashchange', updateRepoFromPath)
 })
 
 particlesInit(async (engine) => {
@@ -151,31 +164,222 @@ let particlesOptions = $derived({
   }
 })
 
+const handleFormSubmit = (e: Event) => {
+  e.preventDefault()
+  if (!formUsername.trim()) return
+  
+  const newHash = formRepo.trim() 
+    ? `${formUsername.trim()}/${formRepo.trim()}`
+    : formUsername.trim()
+  
+  window.location.hash = newHash
+  showSuggestions = false
+}
+
+const searchUsers = async (query: string) => {
+  if (query.length < 3) {
+    suggestions = []
+    showSuggestions = false
+    return
+  }
+
+  try {
+    isSearching = true
+    const response = await fetch(`https://api.github.com/search/users?q=${encodeURIComponent(query)}&per_page=8`)
+    
+    if (!response.ok) {
+      throw new Error(`HTTP error! status: ${response.status}`)
+    }
+    
+    const data = await response.json()
+    suggestions = data.items.map((user: any) => ({
+      login: user.login,
+      avatar_url: user.avatar_url,
+      type: user.type
+    }))
+    showSuggestions = suggestions.length > 0
+  } catch (error) {
+    console.error('Error searching users:', error)
+    suggestions = []
+    showSuggestions = false
+  } finally {
+    isSearching = false
+  }
+}
+
+const handleUsernameInput = (e: Event) => {
+  const target = e.target as HTMLInputElement
+  formUsername = target.value
+  
+  if (searchTimeout) {
+    clearTimeout(searchTimeout)
+  }
+  
+  searchTimeout = setTimeout(() => {
+    searchUsers(formUsername)
+  }, 300)
+}
+
+const selectSuggestion = (login: string) => {
+  formUsername = login
+  showSuggestions = false
+  suggestions = []
+  
+  if (searchTimeout) {
+    clearTimeout(searchTimeout)
+  }
+}
+
+const searchRepositories = async (query: string, username: string) => {
+  if (query.length < 2) {
+    repoSuggestions = []
+    showRepoSuggestions = false
+    return
+  }
+
+  try {
+    isSearchingRepos = true
+    
+    const searchQuery = username.trim() 
+      ? `user:${username.trim()} ${query} in:name`
+      : `${query} in:name`
+    
+    const response = await fetch(`https://api.github.com/search/repositories?q=${encodeURIComponent(searchQuery)}&per_page=8&sort=stars&order=desc`)
+    
+    if (!response.ok) {
+      throw new Error(`HTTP error! status: ${response.status}`)
+    }
+    
+    const data = await response.json()
+    repoSuggestions = data.items.map((repo: any) => ({
+      name: repo.name,
+      full_name: repo.full_name,
+      description: repo.description,
+      stargazers_count: repo.stargazers_count
+    }))
+    showRepoSuggestions = repoSuggestions.length > 0
+  } catch (error) {
+    console.error('Error searching repositories:', error)
+    repoSuggestions = []
+    showRepoSuggestions = false
+  } finally {
+    isSearchingRepos = false
+  }
+}
+
+const handleRepoInput = (e: Event) => {
+  const target = e.target as HTMLInputElement
+  formRepo = target.value
+  
+  if (repoSearchTimeout) {
+    clearTimeout(repoSearchTimeout)
+  }
+  
+  repoSearchTimeout = setTimeout(() => {
+    searchRepositories(formRepo, formUsername)
+  }, 300)
+}
+
+const selectRepoSuggestion = (repoName: string) => {
+  formRepo = repoName
+  showRepoSuggestions = false
+  repoSuggestions = []
+  
+  if (repoSearchTimeout) {
+    clearTimeout(repoSearchTimeout)
+  }
+}
+
+const fetchUserRepositories = async (username: string) => {
+  if (!username.trim()) {
+    repoSuggestions = []
+    showRepoSuggestions = false
+    return
+  }
+
+  try {
+    isSearchingRepos = true
+    
+    const response = await fetch(`https://api.github.com/users/${username.trim()}/repos?per_page=10&sort=updated&direction=desc`)
+    
+    if (!response.ok) {
+      throw new Error(`HTTP error! status: ${response.status}`)
+    }
+    
+    const data = await response.json()
+    
+    // Sort by star count descending and take top 10
+    const sortedRepos = data
+      .sort((a: any, b: any) => b.stargazers_count - a.stargazers_count)
+      .slice(0, 10)
+    
+    repoSuggestions = sortedRepos.map((repo: any) => ({
+      name: repo.name,
+      full_name: repo.full_name,
+      description: repo.description,
+      stargazers_count: repo.stargazers_count
+    }))
+    
+    showRepoSuggestions = repoSuggestions.length > 0
+  } catch (error) {
+    console.error('Error fetching user repositories:', error)
+    repoSuggestions = []
+    showRepoSuggestions = false
+  } finally {
+    isSearchingRepos = false
+  }
+}
+
+const handleRepoFocus = () => {
+  if (repoSuggestions.length > 0) {
+    showRepoSuggestions = true
+  } else if (formUsername.trim() && !formRepo.trim()) {
+    // If username exists but no repo typed yet, fetch default suggestions
+    fetchUserRepositories(formUsername)
+  }
+}
+
 $effect(() => {
   if (username && repo) {
     isLoading = true
     stars = null
     description = null
     userRepos = null
+    avatarUrl = null
     error = null
-    fetch(`https://api.github.com/repos/${username}/${repo}`)
-      .then(async (res) => {
-        if (!res.ok) {
-          const body = await res.json().catch(() => ({ message: 'Unknown error' }))
-          throw new Error(body.message || `HTTP error! status: ${res.status}`)
+    
+    Promise.all([
+      fetch(`https://api.github.com/repos/${username}/${repo}`),
+      fetch(`https://api.github.com/users/${username}`)
+    ])
+      .then(async ([repoRes, userRes]) => {
+        if (!repoRes.ok) {
+          const body = await repoRes.json().catch(() => ({ message: 'Unknown error' }))
+          throw new Error(body.message || `HTTP error! status: ${repoRes.status}`)
+        }
+        if (!userRes.ok) {
+          const body = await userRes.json().catch(() => ({ message: 'Unknown error' }))
+          throw new Error(body.message || `HTTP error! status: ${userRes.status}`)
         }
 
-        return res.json()
+        const [repoData, userData] = await Promise.all([
+          repoRes.json(),
+          userRes.json()
+        ])
+        
+        return { repoData, userData }
       })
-      .then((data) => {
-        stars = data.stargazers_count
-        description = data.description
+      .then(({ repoData, userData }) => {
+        stars = repoData.stargazers_count
+        description = repoData.description
+        avatarUrl = userData.avatar_url
       })
       .catch((err) => {
         console.error('Fetch error:', err)
-        error = `Failed to fetch stars: ${err.message}`
+        error = `Failed to fetch data: ${err.message}`
         stars = null
         description = null
+        avatarUrl = null
       })
       .finally(() => {
         isLoading = false
@@ -185,18 +389,33 @@ $effect(() => {
     stars = null
     description = null
     userRepos = null
+    avatarUrl = null
     error = null
-    fetch(`https://api.github.com/users/${username}/repos?per_page=100`)
-      .then(async (res) => {
-        if (!res.ok) {
-          const body = await res.json().catch(() => ({ message: 'Unknown error' }))
-          throw new Error(body.message || `HTTP error! status: ${res.status}`)
+    
+    Promise.all([
+      fetch(`https://api.github.com/users/${username}/repos?per_page=100`),
+      fetch(`https://api.github.com/users/${username}`)
+    ])
+      .then(async ([reposRes, userRes]) => {
+        if (!reposRes.ok) {
+          const body = await reposRes.json().catch(() => ({ message: 'Unknown error' }))
+          throw new Error(body.message || `HTTP error! status: ${reposRes.status}`)
         }
-        return res.json()
+        if (!userRes.ok) {
+          const body = await userRes.json().catch(() => ({ message: 'Unknown error' }))
+          throw new Error(body.message || `HTTP error! status: ${userRes.status}`)
+        }
+        
+        const [reposData, userData] = await Promise.all([
+          reposRes.json(),
+          userRes.json()
+        ])
+        
+        return { reposData, userData }
       })
-      .then((data) => {
-        if (!Array.isArray(data)) throw new Error('Unexpected response')
-        userRepos = data
+      .then(({ reposData, userData }) => {
+        if (!Array.isArray(reposData)) throw new Error('Unexpected response')
+        userRepos = reposData
           .filter((repo) => repo.stargazers_count > 0)
           .map((repo) => ({
             name: repo.name,
@@ -204,11 +423,13 @@ $effect(() => {
             description: repo.description
           }))
           .sort((a, b) => b.stargazers_count - a.stargazers_count)
+        avatarUrl = userData.avatar_url
       })
       .catch((err) => {
         console.error('Fetch error:', err)
-        error = `Failed to fetch user repos: ${err.message}`
+        error = `Failed to fetch user data: ${err.message}`
         userRepos = null
+        avatarUrl = null
       })
       .finally(() => {
         isLoading = false
@@ -217,6 +438,7 @@ $effect(() => {
     stars = null
     description = null
     userRepos = null
+    avatarUrl = null
     isLoading = false
   }
 })
@@ -226,16 +448,106 @@ $effect(() => {
 
 <main>
   <h1>
-    <a href="https://github.com/mathiscode/github-starcharts">GitHub Starcharts</a>
+    <!-- svelte-ignore a11y_invalid_attribute -->
+    <a href="#">GitHub Starcharts</a>
   </h1>
 
-  <p class="made-with-love">Made with ❤️ by <a href="https://github.com/mathiscode">Jay Mathis</a></p>
+  <p class="made-with-love">
+    <a
+      href="https://github.com/mathiscode/github-starcharts"
+      target="_blank"
+      rel="noopener noreferrer"
+    >Made</a> with ❤️ by 
+    <a
+      href="https://github.com/mathiscode"
+      target="_blank"
+      rel="noopener noreferrer"
+    >Jay Mathis</a>
+  </p>
+
+  <form class="navigation-form" onsubmit={handleFormSubmit}>
+    <div class="form-row">
+      <div class="username-input-container">
+        <input
+          type="text"
+          bind:value={formUsername}
+          oninput={handleUsernameInput}
+          onfocus={() => { if (suggestions.length > 0) showSuggestions = true }}
+          onblur={() => setTimeout(() => showSuggestions = false, 150)}
+          placeholder="GitHub username"
+          class="username-input"
+          required
+        />
+        {#if showSuggestions && suggestions.length > 0}
+          <div class="suggestions-dropdown">
+            {#each suggestions as suggestion}
+              <button
+                type="button"
+                class="suggestion-item"
+                onclick={() => selectSuggestion(suggestion.login)}
+              >
+                <img src={suggestion.avatar_url} alt={suggestion.login} class="avatar" />
+                <span class="login">{suggestion.login}</span>
+                <span class="type">{suggestion.type}</span>
+              </button>
+            {/each}
+          </div>
+        {/if}
+        {#if isSearching}
+          <div class="search-indicator">Searching...</div>
+        {/if}
+      </div>
+      <div class="repo-input-container">
+        <input
+          type="text"
+          bind:value={formRepo}
+          oninput={handleRepoInput}
+          onfocus={handleRepoFocus}
+          onblur={() => setTimeout(() => showRepoSuggestions = false, 150)}
+          placeholder="Repository (optional)"
+          class="repo-input"
+        />
+        {#if showRepoSuggestions && repoSuggestions.length > 0}
+          <div class="repo-suggestions-dropdown">
+            {#each repoSuggestions as suggestion}
+              <button
+                type="button"
+                class="repo-suggestion-item"
+                onclick={() => selectRepoSuggestion(suggestion.name)}
+              >
+                <div class="repo-suggestion-main">
+                  <span class="repo-suggestion-name">{suggestion.name}</span>
+                  <span class="repo-suggestion-stars">★ {suggestion.stargazers_count}</span>
+                </div>
+                {#if suggestion.description}
+                  <div class="repo-suggestion-description">{suggestion.description}</div>
+                {/if}
+              </button>
+            {/each}
+          </div>
+        {/if}
+        {#if isSearchingRepos}
+          <div class="repo-search-indicator">Searching repos...</div>
+        {/if}
+      </div>
+      <button class="go-button" type="submit" disabled={!formUsername.trim()}>
+        Go
+      </button>
+    </div>
+  </form>
+
+  {#if avatarUrl && (username && (repo || userRepos))}
+    <div class="user-avatar-section">
+      <img src={avatarUrl} alt={username} class="user-avatar-large" />
+      <div class="username-display">{username}</div>
+    </div>
+  {/if}
 
   {#if username && repo}
     <div class="repo-card" style="margin: 2rem auto; max-width: 80vw;">
       <div class="repo-header">
         <h2>
-          <a href={`/${username}`}>{username}</a> / <a
+          <a href={`#${username}`}>{username}</a> / <a
             href={`https://github.com/${username}/${repo}`}
             target="_blank"
             rel="noopener noreferrer"
@@ -258,16 +570,6 @@ $effect(() => {
   {:else if error}
     <p class="error">{@html error}</p>
   {:else if stars !== null}
-    <div class="stars-display">
-      {#if displayedStars.length > 0}
-        {#each displayedStars as starColor}
-          <span title={STAR_TIERS.find(tier => tier.color === starColor)?.value.toLocaleString()} class="star {starColor}">★</span>
-        {/each}
-      {:else if stars === 0}
-        <span>No stars yet!</span>
-      {/if}
-    </div>
-
     <div class="legend">
       <h3>Legend:</h3>
       <ul>
@@ -278,6 +580,16 @@ $effect(() => {
         {/each}
         <li><span class="star silver">★</span> = 1</li>
       </ul>
+    </div>
+
+    <div class="stars-display">
+      {#if displayedStars.length > 0}
+        {#each displayedStars as starColor}
+          <span title={STAR_TIERS.find(tier => tier.color === starColor)?.value.toLocaleString()} class="star {starColor}">★</span>
+        {/each}
+      {:else if stars === 0}
+        <span>No stars yet!</span>
+      {/if}
     </div>
   {/if}
 
@@ -298,9 +610,7 @@ $effect(() => {
           <div class="repo-card">
             <div class="repo-header">
               <a
-                href={`https://github.com/${username}/${repo.name}`}
-                target="_blank"
-                rel="noopener noreferrer"
+                href={`#${username}/${repo.name}`}
                 class="repo-name"
               >{repo.name}</a>
               <span class="repo-star-count">{repo.stargazers_count.toLocaleString()}</span>
@@ -456,10 +766,10 @@ $effect(() => {
   .stars-display {
     margin: 2em 0;
     padding: 2em;
-    background-color: #252525;
-    border-radius: 12px;
-    border: 1px solid #444;
-    box-shadow: 0 4px 15px rgba(0, 0, 0, 0.2);
+    /* background-color: #252525; */
+    /* border-radius: 12px; */
+    /* border: 1px solid #444; */
+    /* box-shadow: 0 4px 15px rgba(0, 0, 0, 0.2); */
   }
 
   .star {
@@ -570,5 +880,299 @@ $effect(() => {
     font-size: 0.8em;
     color: #888888;
     margin-top: 0;
+  }
+
+  .user-avatar-section {
+    display: flex;
+    flex-direction: column;
+    align-items: center;
+    margin: 2rem 0;
+    gap: 0.8rem;
+  }
+
+  .user-avatar-large {
+    width: 80px;
+    height: 80px;
+    border-radius: 50%;
+    border: 3px solid #444;
+    box-shadow: 0 4px 15px rgba(0, 0, 0, 0.4);
+    transition: transform 0.2s ease;
+  }
+
+  .user-avatar-large:hover {
+    transform: scale(1.05);
+  }
+
+  .username-display {
+    font-size: 1.3em;
+    font-weight: 600;
+    color: #b0b0ff;
+    text-shadow: 0 2px 4px rgba(0, 0, 0, 0.3);
+  }
+
+  .navigation-form {
+    margin: 2rem auto 3rem auto;
+    max-width: 500px;
+  }
+
+  .form-row {
+    display: flex;
+    gap: 0.5rem;
+    align-items: center;
+    flex-wrap: wrap;
+    justify-content: center;
+  }
+
+  .username-input-container, .repo-input-container {
+    position: relative;
+    flex: 0 0 auto;
+    width: 200px;
+  }
+
+  .repo-input-container {
+    width: 220px;
+  }
+
+  .username-input, .repo-input {
+    padding: 0.8rem 1rem;
+    border: 2px solid #333;
+    border-radius: 6px;
+    background-color: #1a1a1a;
+    color: #ffffff;
+    font-size: 1rem;
+    transition: border-color 0.2s ease;
+    width: 100%;
+    box-sizing: border-box;
+  }
+
+  .username-input:focus, .repo-input:focus {
+    outline: none;
+    border-color: #5555ff;
+    box-shadow: 0 0 0 2px rgba(85, 85, 255, 0.2);
+  }
+
+  .username-input::placeholder, .repo-input::placeholder {
+    color: #666;
+  }
+
+  .navigation-form button {
+    padding: 0.8rem 1.5rem;
+    border: none;
+    border-radius: 6px;
+    background: linear-gradient(45deg, #5555ff, #7777ff);
+    color: white;
+    font-size: 1rem;
+    font-weight: 600;
+    cursor: pointer;
+    transition: all 0.2s ease;
+    min-width: 60px;
+  }
+
+  .navigation-form button:hover:not(:disabled) {
+    background: linear-gradient(45deg, #6666ff, #8888ff);
+    transform: translateY(-1px);
+    box-shadow: 0 4px 12px rgba(85, 85, 255, 0.3);
+  }
+
+  .navigation-form button:disabled {
+    background: #333;
+    color: #666;
+    cursor: not-allowed;
+    transform: none;
+    box-shadow: none;
+  }
+
+  .suggestions-dropdown {
+    position: absolute;
+    top: 100%;
+    left: 0;
+    background: #1a1a1a;
+    border: 2px solid #333;
+    border-top: none;
+    border-radius: 0 0 6px 6px;
+    max-height: 300px;
+    overflow-y: auto;
+    z-index: 1000;
+    box-shadow: 0 4px 12px rgba(0, 0, 0, 0.3);
+    min-width: 300px;
+    width: max-content;
+  }
+
+  .suggestion-item {
+    width: 100%;
+    padding: 0.8rem 1rem;
+    margin-bottom: 0.3rem;
+    border: none;
+    background: transparent;
+    color: #ffffff;
+    text-align: left;
+    cursor: pointer;
+    display: flex;
+    align-items: center;
+    gap: 0.8rem;
+    transition: background-color 0.2s ease;
+    font-size: 0.95rem;
+  }
+
+  .suggestion-item:last-child {
+    margin-bottom: 0;
+  }
+
+  .suggestion-item:hover {
+    background-color: #2a2a2a;
+  }
+
+  .suggestion-item:focus {
+    outline: none;
+    background-color: #333;
+  }
+
+  .suggestion-item .avatar {
+    width: 24px;
+    height: 24px;
+    border-radius: 50%;
+    flex-shrink: 0;
+  }
+
+  .suggestion-item .login {
+    font-weight: 600;
+    color: #b0b0ff;
+    flex: 1;
+  }
+
+  .suggestion-item .type {
+    font-size: 0.8em;
+    color: #888;
+    text-transform: capitalize;
+    padding: 0.2rem 0.5rem;
+    background: #333;
+    border-radius: 4px;
+    flex-shrink: 0;
+  }
+
+  .search-indicator {
+    position: absolute;
+    top: 100%;
+    left: 0;
+    background: #1a1a1a;
+    border: 2px solid #333;
+    border-top: none;
+    border-radius: 0 0 6px 6px;
+    padding: 0.8rem 1rem;
+    color: #888;
+    font-size: 0.9rem;
+    z-index: 999;
+    min-width: 300px;
+    width: max-content;
+  }
+
+  .repo-search-indicator {
+    position: absolute;
+    top: 100%;
+    right: 0;
+    background: #1a1a1a;
+    border: 2px solid #333;
+    border-top: none;
+    border-radius: 0 0 6px 6px;
+    padding: 0.8rem 1rem;
+    color: #888;
+    font-size: 0.9rem;
+    z-index: 999;
+    width: 350px;
+    max-width: calc(100vw - 2rem);
+  }
+
+  .repo-suggestions-dropdown {
+    position: absolute;
+    top: 100%;
+    right: 0;
+    background: #1a1a1a;
+    border: 2px solid #333;
+    border-top: none;
+    border-radius: 0 0 6px 6px;
+    max-height: 300px;
+    overflow-y: auto;
+    z-index: 1000;
+    box-shadow: 0 4px 12px rgba(0, 0, 0, 0.3);
+    width: 350px;
+    max-width: calc(100vw - 2rem);
+  }
+
+  .repo-suggestion-item {
+    width: 100%;
+    padding: 0.8rem 1rem;
+    margin-bottom: 0.3rem;
+    border: none;
+    background: transparent;
+    color: #ffffff;
+    text-align: left;
+    cursor: pointer;
+    display: flex;
+    flex-direction: column;
+    gap: 0.3rem;
+    transition: background-color 0.2s ease;
+    font-size: 0.95rem;
+  }
+
+  .repo-suggestion-item:last-child {
+    margin-bottom: 0;
+  }
+
+  .repo-suggestion-item:hover {
+    background-color: #2a2a2a;
+  }
+
+  .repo-suggestion-item:focus {
+    outline: none;
+    background-color: #333;
+  }
+
+  .repo-suggestion-main {
+    display: flex;
+    align-items: center;
+    justify-content: space-between;
+    gap: 1rem;
+  }
+
+  .repo-suggestion-name {
+    font-weight: 600;
+    color: #ffffff;
+    flex: 1;
+  }
+
+  .repo-suggestion-stars {
+    font-size: 0.85em;
+    color: #ffd700;
+    font-weight: 500;
+    flex-shrink: 0;
+  }
+
+  .repo-suggestion-description {
+    font-size: 0.8em;
+    color: #cccccc;
+    line-height: 1.3;
+    margin-top: 0.2rem;
+  }
+
+  @media (max-width: 600px) {
+    .form-row {
+      flex-direction: column;
+      width: 100%;
+    }
+
+    .username-input-container, .repo-input-container {
+      width: 100%;
+      max-width: 300px;
+    }
+
+    .navigation-form button {
+      width: 100%;
+      max-width: 300px;
+    }
+  }
+
+  .go-button {
+    width: 100%;
+    max-width: 425px;
   }
 </style>
