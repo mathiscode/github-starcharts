@@ -340,6 +340,10 @@ const selectSuggestion = (login: string) => {
   showSuggestions = false
   suggestions = []
   
+  // Clear repo suggestions since we have a new username
+  repoSuggestions = []
+  showRepoSuggestions = false
+  
   if (searchTimeout) clearTimeout(searchTimeout)
   searchTimeout = null
 }
@@ -348,6 +352,10 @@ const clearUsername = () => {
   formUsername = ''
   showSuggestions = false
   suggestions = []
+  
+  // Also clear repo suggestions since they're tied to the username
+  repoSuggestions = []
+  showRepoSuggestions = false
   
   if (searchTimeout) clearTimeout(searchTimeout)
   searchTimeout = null
@@ -489,9 +497,16 @@ const fetchUserRepositories = async (username: string) => {
 }
 
 const handleRepoFocus = () => {
-  if (repoSuggestions.length > 0) showRepoSuggestions = true
-  else if (formUsername.trim() && !formRepo.trim()) fetchUserRepositories(formUsername)
-  else if (!formUsername.trim() && !formRepo.trim()) searchRepositories('', '')
+  if (!formUsername.trim()) {
+    // If no username, always show default suggestions
+    searchRepositories('', '')
+  } else if (!formRepo.trim()) {
+    // If username exists but no repo, fetch user repositories
+    fetchUserRepositories(formUsername)
+  } else if (repoSuggestions.length > 0) {
+    // Only reuse existing suggestions if we have both username and partial repo
+    showRepoSuggestions = true
+  }
 }
 
 $effect(() => {
